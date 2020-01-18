@@ -5,8 +5,10 @@ import logging
 import time
 from datetime import datetime
 import pandas as pd
+import xmltodict
 import xml.etree.ElementTree as et
 from lxml import etree, html
+import pdb
 
 logging.basicConfig(filename="logs.log")
 
@@ -82,12 +84,10 @@ if __name__ == "__main__":
     output_path = None
     cAuthor = None # author name
     tag_count = 0 # number of tags [topic, section, paragraph]
-    figure = 0
-    table = 0
-    form = 0
-    fig_abbr = None
-    table_abbr = None
-    form_abbr = None
+    fig_abbr = "Fig"
+    table_abbr = "Tab"
+    form_abbr = "Form"
+    abbr_fields = {}
     references = []
     referenceIds = []
 
@@ -99,17 +99,25 @@ if __name__ == "__main__":
     # Get values from PathAndValues sheet
     # need to be updated later for dynamic
     try:
+        cPublicTitle = validate_cell_value(pv["Value"][0])
+        cAuthor = validate_cell_value(pv["Value"][1])
         dita_map_path = validate_cell_value(pv["Value"][6])
         input_path = validate_cell_value(pv["Value"][10])
         output_path = validate_cell_value(pv["Value"][11])
         fig_abbr = validate_cell_value(pv["Value"][12])
         table_abbr = validate_cell_value(pv["Value"][13])
         form_abbr = validate_cell_value(pv["Value"][14])
-        cAuthor = validate_cell_value(pv["Value"][1])
+
+        # initialize abbreviation coutns for Tab, Figure, and Form
+        abbr_fields[fig_abbr] = {'count': 0, 'data': [], "name": "Figure"}
+        abbr_fields[table_abbr] = {'count': 0, 'data': [], "name": "Table"}
+        abbr_fields[form_abbr] = {'count': 0, 'data': [], "name": "Form"}
     except Exception as e:
         print("Error when reading values from PathAndValues")
         log(str(e))
         sys.exit(1)
+
+    print("#############: ", abbr_fields)
 
     if not os.path.exists(input_path):
         print("Input folder doesn't exist!")
@@ -144,6 +152,7 @@ if __name__ == "__main__":
         xmljson = None
         with open(d_file_path, 'r') as content_file:
             txt = content_file.read()
+            base_str = txt.split('<topic')[0]
             tree = etree.XML('<topic' + txt.split('<topic')[1])
 
         if tree == None:
@@ -212,13 +221,6 @@ if __name__ == "__main__":
 
                 tags[el.tag]['count'] = tags[el.tag]['count'] + 1
 
-                """ dynamic solution (later) """
-                # for tag in tags:
-                #     if 'level' in tags[tag]:
-                #         if current_level < tags[tag]['level']:
-                #             tags[tag]['level'] = 0
-                #         else:
-
             else:
                 pass
 
@@ -229,64 +231,65 @@ if __name__ == "__main__":
             filename = tree.xpath("//topic/title/text()")[0]
             filename = filename.replace(" ", "")
         except:
-            pass
-
-        with open(output_path+filename+".dita", "w") as f:
-            f.write(xml_str)            
+            pass          
 
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-        if "###Fig" in txt:
-            # add figId and title to FigureList.dita
-            print("processing ###Fig")
-            pass
-        elif "###Table" in txt:
-            print("processing ###Table")
-            # add figId and title to FigureList.dita
-        elif "###Form" in txt:
-            print("processing ###Form")
-            # add figId and title to FigureList.dita
-        elif "###" in txt:
-            """ subsitute & add referenceId, documentLink
-            to reference arrary"""
-            print("processing ###!")
-            start_points = [m.start() for m in re.finditer('###', txt)]
-            for s_point in start_points:
+        start_points = [m.start() for m in re.finditer('###', txt)]
+        for s_point in start_points:
+            if "###" in txt:
                 input_code = txt[s_point:].split("###")[1].split('@@')[0]
                 codes = input_code.split("##")
-                if len(codes) > 3:
-                    if codes[0][:3] == "Fig" or codes[0][:3] == "Tab" or codes[0][:3] == "Form":
-                        pass
-                    else:
-                        print("~~~~~~~~~~~ ### here ~~~~~~~~~~~~")
-                        reference_item = dict()
-                        referenceIds = []
-                        referenceAPAs = []
-                        documentLinks = []
+                if len(codes) > 3: 
+                    print("~~~~~~~~~~~ ### here ~~~~~~~~~~~~")
+                    reference_item = dict()
+                    referenceIds = []
+                    references = []
+                    documentLinks = []
 
-                        reference_item['x'] = 'this'
-                        reference_item['cito'] = codes[1].replace('c=', '')
-                        # Notice: let's assume x is "this" for now
-                        for code in codes[2:]:
-                            if 't=' in code:
-                                reference_item['t'] = code.replace('t=', '')
-                            elif 'p=' in code:
-                                reference_item['p'] = code.replace('p=', '')
+                    reference_item['start_point'] = s_point
+                    reference_item['x'] = 'this'
+                    reference_item['cito'] = codes[1].replace('c=', '')
+                    # Notice: let's assume x is "this" for now
+                    for code in codes[2:]:
+                        if 't=' in code:
+                            t_code = code.replace('t=', '')
+                            if int(t_code) == 1:
+                                reference_item['a'] = 2
+                            elif int(t_code) == 3:
+                                reference_item['a'] = 4
                             else:
-                                ma_attrs = ma[ma.index==int(code)]
-                                if len(ma_attrs) > 0:
-                                    referenceIds.append(code)
-
-                        if len(referenceIds) == 0:
-                            reference_item['ids'] = None
+                                reference_item['a'] = int(t_code)
+                        elif 'p=' in code:
+                            reference_item['p'] = code.replace('p=', '')
                         else:
-                            print(reference_item)
-                            for ref_id in referenceIds:
-                                apa = ma['Reference Entry (APA)'][int(ref_id)]
-                                if str(apa) != "nan":
-                                    referenceAPAs.append(apa)
-                                else:
-                                    referenceAPAs.append('')
+                            code_ids = code.split("#")
+                            for code_id in code_ids:
+                                ma_attrs = ma[ma.index==int(code_id)]
+                                if len(ma_attrs) > 0:
+                                    referenceIds.append(code_id)
 
+                    if len(referenceIds) == 0:
+                        reference_item['ids'] = None
+                    else:
+                        if len(referenceIds) > 1:
+                            reference_item['a'] = 5
+
+                        xref_str = ''
+                        for ref_id in referenceIds:
+                            base_idx = 16
+                            column_name = ma.columns[base_idx+reference_item['a']]
+                            if ref_id in referenceIds:
+                                full_reference = ''
+                                if ref_id not in references:
+                                    full_reference = '' + ma['Reference Entry (APA)'][int(ref_id)]
+                                    references.append(ref_id)
+
+                                apa = ma[column_name][int(ref_id)]
+                                if str(apa) != "nan":
+                                    if reference_item['a'] == 5:
+                                        apa = apa.replace('(', '').replace(')', '')
+
+                                d_link = dict()
                                 # create output xref
                                 if str(ma['Attachment'][int(ref_id)]) != "nan":
                                     xref_href = ma['Attachment'][int(ref_id)]
@@ -294,77 +297,82 @@ if __name__ == "__main__":
                                         # Notice: Is it necessary? "view=fitH,100"
                                         xref_href = '{}?page={}&view=fitH,100'.format(
                                             xref_href, reference_item['p'])
-                                    documentLinks.append({'url': xref_href,
-                                                        'type': 'Attachment' })
+                                    d_link = {'url': xref_href,
+                                            'type': 'Attachment' }
                                 elif str(ma['DOI'][int(ref_id)]) != "nan":
                                     xref_href = ma['DOI'][int(ref_id)]
-                                    documentLinks.append({'url': xref_href,
-                                                        'type': 'DOI' })
+                                    d_link = {'url': xref_href, 'type': 'DOI' }
                                 elif str(ma['URL'][int(ref_id)]) != "nan":
                                     xref_href = ma['URL'][int(ref_id)]
-                                    documentLinks.append({'url': xref_href,
-                                                        'type': 'URL' })
+                                    d_link = {'url': xref_href, 'type': 'URL' }
                                 else:
-                                    documentLinks.append({'type': 'other' })
+                                    d_link = {'type': 'other' }
 
-                            reference_item['ids'] = '##'.join(referenceIds)
-                            reference_item['referenceAPAs'] = '; '.join(x for x in referenceAPAs)
-                            reference_item['documentLinks'] = documentLinks
-                            references.append(reference_item)
+                                if d_link['type'] == "Attachment":
+                                    """ Notice: 
+                                        1. <cite>{3}</cite> output is correct? 
+                                        2. art_{2}: {2} can be multiple ids? """
+                                    xref_str = xref_str + '<xref href="{0}" format=pdf" scope="external">\
+                                        <cite otherprops="{1}" keyref="references/art_{2}">{3}</cite>\
+                                        </xref>'.format(d_link['url'],
+                                                    reference_item['cito'],
+                                                    ref_id,
+                                                    apa) + '; '
+                                elif d_link['type'] == "DOI" or d_link['type'] == "URL":
+                                    """ Notice: desc is '??' now.
+                                        where can I reference the value of it? """
+                                    xref_str = xref_str + '<xref href="{0}" format="html" scope="external">\
+                                        <cite otherprops="{1}" keyref="references/art_{2}">\
+                                        <desc>{3} in {4} authored by {5}</desc>{6}</cite>\
+                                        </xref>'.format(d_link['url'],
+                                                        reference_item['cito'],
+                                                        ref_id,
+                                                        apa,
+                                                        cPublicTitle,
+                                                        cAuthor,
+                                                        full_reference) + '; '
+                                else:
+                                    xref_str = xref_str + '<cite otherprops="{0}" keyref="references/art_{1}">\
+                                        {2} in {3} authored by {4}</desc>{5}\
+                                        </cite>'.format(reference_item['cito'],
+                                                    ref_id,
+                                                    apa,
+                                                    cPublicTitle,
+                                                    cAuthor,
+                                                    full_reference) + '; '
 
+                        replace_str = txt[s_point:].split("@@")[0]+'@@'
+                        xml_str = xml_str.replace(replace_str, xref_str[:-2])
+
+                else:
+                    abbr_code = codes[0].split("#")[0]
+                    if abbr_code in [fig_abbr, table_abbr, form_abbr]:
+                        abbr_element_text = codes[0].replace('#', '').replace('@@', '')
+                        abbr_fields[abbr_code]['count'] = abbr_fields[abbr_code]['count'] + 1
+                        abbr_fields[abbr_code]['data'].append({
+                            'num': abbr_fields[abbr_code]['count'],
+                            'text': abbr_element_text })
+
+                        abbr_str = '<p id="{0}{3}" otherprops="doco:{1}"> \
+                                    <ph otherprops="doco:Label"><b>{2} {3}</b></ph\
+                                    <ph><b>{4}</b></ph>\
+                                    </p>'.format(abbr_code.lower(),
+                                                abbr_fields[abbr_code]["name"],
+                                                abbr_code,
+                                                abbr_fields[abbr_code]['count'],
+                                                abbr_element_text)
+
+                        replace_str = txt[s_point:].split("@@")[0]+'@@'
+                        xml_str = xml_str.replace(replace_str, abbr_str)
         else:               
             pass
 
-    """ Sort referenceAPAs arrary: Notice: discuss later"""
+    with open(output_path+'Method.dita', 'w') as f:
+        f.write(xml_str)
+
+    """ Sort references arrary: Notice: discuss later"""
     """ Produce ReferenceLst.dita """
 
-    # write prog of ReferenceList.dita Notice: discuss latre
-    reference_str = '' + base_str
-    reference_str = reference_str + '<prog>\n\t<author>{}</author>\n</prog>\n\t'.format(cAuthor)
-    # write body of ReferenceList.dita
-    reference_str = reference_str + '<body>' 
-    for reference_item in references:
-        documentLinks = reference_item['documentLinks']
-        if len(documentLinks) > 0:
-            tmp = None
-            if documentLinks[0]['type'] == "Attachment":
-                """ Notice: 
-                    1. <cite>{3}</cite> output is correct? 
-                    2. art_{2}: {2} can be multiple ids? """
-                tmp = '<p>\n\t \
-                    <xref href="{0}" format=pdf" scope="external">\
-                    <cite otherprops="{1}" keyref="references/art_{2}">{3}</cite></xref>\n\t\
-                    </p>\n'.format(documentLinks[0]['url'],
-                                reference_item['cito'],
-                                reference_item['ids'],
-                                reference_item['referenceAPAs'])
-            elif documentLinks[0]['type'] == "DOI" or documentLinks[0]['type'] == "URL":
-                """ Notice: desc is '??' now.
-                    where can I reference the value of it? """
-                tmp = '<p>\n\t \
-                    <xref href="{0}" format="html" scope="external">\
-                    <cite otherprops="{1}" keyref="references/art_{2}">\n\t\
-                    <desc>??</desc>{3}\n\t</cite>\n\t</xref> \
-                    </p>\n'.format(documentLinks[0]['url'].
-                                    reference_item['cito'],
-                                    reference_item['ids'],
-                                    reference_item['referenceAPAs'])
-            else:
-                tmp = '<p>\n\t \
-                    <cite otherprops="{0}" keyref="references/art_{1}">\
-                    <desc>??</desc>{2}</cite>\
-                    </p>\n'.format(reference_item['cito'],
-                                reference_item['ids'],
-                                reference_item['referenceAPAs'])
-
-            reference_str = reference_str + tmp
-    reference_str = reference_str + '</body></topic>'
-
-    with open(output_path+'ReferenceList.dita', 'w') as f:
-        f.write(reference_str)
-
-
-    """ Write *List.dita files """
 
 
 
