@@ -61,6 +61,12 @@ def validate_cell_value(val):
         return None
     return val
 
+def getKey(item):
+    return item[0]
+
+def getValue(item):
+    return item[1]
+
 if __name__ == "__main__":
     master_xlsx_path = "/mnt/g/projects/ResearchMeta"
     master_xlsx_filename = "DBA_ResearchMetaData_Python.xlsx"
@@ -90,6 +96,7 @@ if __name__ == "__main__":
     abbr_fields = {}
     references = []
     referenceIds = []
+    escape_characters = ['<', '>', '&']
 
     """ Notice: topic.dtd should be changed for each files? i.e 
         ReferencesList.dtd, FigureList.dtd, etc """
@@ -103,21 +110,20 @@ if __name__ == "__main__":
         cAuthor = validate_cell_value(pv["Value"][1])
         dita_map_path = validate_cell_value(pv["Value"][6])
         input_path = validate_cell_value(pv["Value"][10])
-        output_path = validate_cell_value(pv["Value"][11])
+        # output_path = validate_cell_value(pv["Value"][11])
+        output_path = "/mnt/g/projects/ResearchMeta/output"
         fig_abbr = validate_cell_value(pv["Value"][12])
         table_abbr = validate_cell_value(pv["Value"][13])
         form_abbr = validate_cell_value(pv["Value"][14])
 
         # initialize abbreviation coutns for Tab, Figure, and Form
-        abbr_fields[fig_abbr] = {'count': 0, 'data': [], "name": "Figure"}
-        abbr_fields[table_abbr] = {'count': 0, 'data': [], "name": "Table"}
-        abbr_fields[form_abbr] = {'count': 0, 'data': [], "name": "Form"}
+        abbr_fields[fig_abbr] = {'count': 0, 'data': [], "name": "Figure", "code": "fig"}
+        abbr_fields[table_abbr] = {'count': 0, 'data': [], "name": "Table", "code": "tab"}
+        abbr_fields[form_abbr] = {'count': 0, 'data': [], "name": "Form", "code": "form"}
     except Exception as e:
         print("Error when reading values from PathAndValues")
         log(str(e))
         sys.exit(1)
-
-    print("#############: ", abbr_fields)
 
     if not os.path.exists(input_path):
         print("Input folder doesn't exist!")
@@ -147,6 +153,9 @@ if __name__ == "__main__":
     for d_file in dita_files:
         os.chdir(dita_map_path)
         d_file_path = os.path.join(dita_map_path, d_file)
+        filename = d_file.split(os.path.sep)[-1]
+        if filename[len(filename)-5:] == ".dita":
+            filename = filename.replace(filename[len(filename)-5:], "")
 
         tree = None
         xmljson = None
@@ -226,33 +235,66 @@ if __name__ == "__main__":
 
         # Write each dita file
         xml_str = base_str + str(etree.tostring(tree).decode())
-        filename = 'NoName'
-        try:
-            filename = tree.xpath("//topic/title/text()")[0]
-            filename = filename.replace(" ", "")
-        except:
-            pass          
-
-        print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
         start_points = [m.start() for m in re.finditer('###', txt)]
+        s_index = 1
         for s_point in start_points:
-            if "###" in txt:
-                input_code = txt[s_point:].split("###")[1].split('@@')[0]
-                codes = input_code.split("##")
-                if len(codes) > 3: 
-                    print("~~~~~~~~~~~ ### here ~~~~~~~~~~~~")
+            input_code = ''
+            tmp = ''
+
+            if s_index < len(start_points):
+                tmp = txt[s_point:start_points[s_index]]
+                sep_idxs = [m.start() for m in re.finditer('##', tmp)]
+                input_code = tmp[:sep_idxs[len(sep_idxs)-1]]
+                
+            else:
+                tmp = txt[s_point:]
+                sep_idxs = [m.start() for m in re.finditer('##', tmp)]
+                input_code = tmp[:sep_idxs[len(sep_idxs)-1]]
+
+            temp_splits = input_code.split("###")[1].split("##")
+            input_code = "###"
+
+            if len(temp_splits) > 1:
+                input_code= input_code + "##".join(x for x in temp_splits)
+            else:
+                input_code= input_code + temp_splits[0]
+            s_index = s_index + 1
+
+            # if abbr_code in [fig_abbr, table_abbr, form_abbr]:
+            if "###"+fig_abbr in input_code or "###"+table_abbr in input_code or "###"+form_abbr in  input_code:
+                abbr_code = input_code.split("###")[1].split("#")[0]
+                abbr_element_text = codes[0].replace("###"+abbr_code, '').replace("#", "")
+                abbr_fields[abbr_code]['count'] = abbr_fields[abbr_code]['count'] + 1
+                abbr_fields[abbr_code]['data'].append({
+                    'num': abbr_fields[abbr_code]['count'],
+                    'text': abbr_element_text })
+
+                abbr_str = '<p id="{0}{3}" otherprops="doco:{1}"> \
+                            <ph otherprops="doco:Label"><b>{2} {3}</b></ph\
+                            <ph><b>{4}</b></ph>\
+                            </p>'.format(abbr_code.lower(),
+                                        abbr_fields[abbr_code]["name"],
+                                        abbr_code,
+                                        abbr_fields[abbr_code]['count'],
+                                        abbr_element_text)
+
+                xml_str = xml_str.replace(input_code+"##", abbr_str)
+            else:
+                codes = input_code.split("###")[1].split("##")
+                if len(codes) > 2: 
                     reference_item = dict()
                     referenceIds = []
-                    references = []
                     documentLinks = []
 
                     reference_item['start_point'] = s_point
                     reference_item['x'] = 'this'
                     reference_item['cito'] = codes[1].replace('c=', '')
                     # Notice: let's assume x is "this" for now
+
                     for code in codes[2:]:
                         if 't=' in code:
                             t_code = code.replace('t=', '')
+                            print(t_code)
                             if int(t_code) == 1:
                                 reference_item['a'] = 2
                             elif int(t_code) == 3:
@@ -279,15 +321,17 @@ if __name__ == "__main__":
                             base_idx = 16
                             column_name = ma.columns[base_idx+reference_item['a']]
                             if ref_id in referenceIds:
-                                full_reference = ''
-                                if ref_id not in references:
-                                    full_reference = '' + ma['Reference Entry (APA)'][int(ref_id)]
-                                    references.append(ref_id)
+                                full_reference = '' + ma['Reference Entry (APA)'][int(ref_id)]
+                                for ecape_c in escape_characters:
+                                    full_reference.replace(ecape_c, "")
 
                                 apa = ma[column_name][int(ref_id)]
                                 if str(apa) != "nan":
                                     if reference_item['a'] == 5:
                                         apa = apa.replace('(', '').replace(')', '')
+
+                                if ref_id not in references:
+                                    references.append((ref_id, apa, d_file_path))
 
                                 d_link = dict()
                                 # create output xref
@@ -309,9 +353,6 @@ if __name__ == "__main__":
                                     d_link = {'type': 'other' }
 
                                 if d_link['type'] == "Attachment":
-                                    """ Notice: 
-                                        1. <cite>{3}</cite> output is correct? 
-                                        2. art_{2}: {2} can be multiple ids? """
                                     xref_str = xref_str + '<xref href="{0}" format=pdf" scope="external">\
                                         <cite otherprops="{1}" keyref="references/art_{2}">{3}</cite>\
                                         </xref>'.format(d_link['url'],
@@ -319,8 +360,6 @@ if __name__ == "__main__":
                                                     ref_id,
                                                     apa) + '; '
                                 elif d_link['type'] == "DOI" or d_link['type'] == "URL":
-                                    """ Notice: desc is '??' now.
-                                        where can I reference the value of it? """
                                     xref_str = xref_str + '<xref href="{0}" format="html" scope="external">\
                                         <cite otherprops="{1}" keyref="references/art_{2}">\
                                         <desc>{3} in {4} authored by {5}</desc>{6}</cite>\
@@ -341,37 +380,76 @@ if __name__ == "__main__":
                                                     cAuthor,
                                                     full_reference) + '; '
 
-                        replace_str = txt[s_point:].split("@@")[0]+'@@'
-                        xml_str = xml_str.replace(replace_str, xref_str[:-2])
-
-                else:
-                    abbr_code = codes[0].split("#")[0]
-                    if abbr_code in [fig_abbr, table_abbr, form_abbr]:
-                        abbr_element_text = codes[0].replace('#', '').replace('@@', '')
-                        abbr_fields[abbr_code]['count'] = abbr_fields[abbr_code]['count'] + 1
-                        abbr_fields[abbr_code]['data'].append({
-                            'num': abbr_fields[abbr_code]['count'],
-                            'text': abbr_element_text })
-
-                        abbr_str = '<p id="{0}{3}" otherprops="doco:{1}"> \
-                                    <ph otherprops="doco:Label"><b>{2} {3}</b></ph\
-                                    <ph><b>{4}</b></ph>\
-                                    </p>'.format(abbr_code.lower(),
-                                                abbr_fields[abbr_code]["name"],
-                                                abbr_code,
-                                                abbr_fields[abbr_code]['count'],
-                                                abbr_element_text)
-
-                        replace_str = txt[s_point:].split("@@")[0]+'@@'
-                        xml_str = xml_str.replace(replace_str, abbr_str)
+                        xml_str = xml_str.replace(input_code, xref_str[:-2])
+                    
         else:               
             pass
 
-    with open(output_path+'Method.dita', 'w') as f:
+    with open('{}{}{}.dita'.format(output_path, os.path.sep, filename), 'w') as f:
         f.write(xml_str)
 
     """ Sort references arrary: Notice: discuss later"""
+    sorted(references, key=getKey)
     """ Produce ReferenceLst.dita """
+    reference_str = ''+ '<?xml version="1.0" encoding="UTF-8"?>\
+        <!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">\
+        <topic id="refs" xml:lang="en" status="new" otherprops="doco.Bibliography">\
+        <title>Reference</title><titlealts>\
+        <navtitle>References</navtitle>\
+        <searchtitle>References to {0} by {1}</searchtitle>\
+        </titlealts><abstract>\
+        <shortdesc>References to {0} by {1}</shortdesc>\
+        </abstract><prolog><author>{1}</author>\
+        <publisher>Reto Schneider</publisher><copyright>\
+        <copyryear year="2017"/><copyrholder>Reto Schneider</copyrholder>\
+        </copyright><critdates><created date="2017-06-10"/>\
+        <revised modified="2017-06-10"/></critdates>\
+        <permissions view="public"/></prolog>\
+        <body otherprops="doco:BibliographicReferenceList">'.format(
+            cPublicTitle, cAuthor)
+
+    for reference in references:
+        reference_str = reference_str + '<p id="LitRev_{0}" otherprops="biro:BibliographicReference">\
+            <ph>{1}</ph>\
+            <ph><xref href="References/LitRef_{0}.dita" format="dita" scope="local">{2}</xref>\
+            </ph></p>'.format(reference[0], reference[1], d_file_path)
+
+    reference_str = reference_str + '</body></topic>'
+    with open('{}{}{}.dita'.format(output_path, os.path.sep, 'ReferencesList'), 'w') as f:
+        f.write(reference_str)
+
+    """write *List.dita files"""
+    for abbr_code in [fig_abbr, table_abbr, form_abbr]:
+        if len(abbr_fields[abbr_code]['data']) > 0:
+            abbr_str = '' + '<?xml version="1.0" encoding="UTF-8"?>\
+                <!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">\
+                <topic id="{0}s" otherprops="doco:ListOf{0}s">\
+                <title>{0}s</title> \
+                <body> \
+                <simpletable id="{0}List" frame="none" relcolwidth="1* 6*">'.format(abbr_fields[abbr_code]["name"])
+
+            for abbr_data in abbr_fields[abbr_code]['data']:
+                abbr_str = abbr_str + '<strow id="{0}{1}">\
+                    <stentry >\
+                    <xref href="{7}.dita#{0}{1}" type="{0}">{2} {1}\
+                    <desc>Image title from {3} by {4}, {5}</desc></xref></stentry>\
+                    <stentry>{6}</stentry>\
+                    </strow>'.format(abbr_fields[abbr_code]["code"],
+                                    abbr_data["num"],
+                                    abbr_code,
+                                    cPublicTitle,
+                                    cAuthor,
+                                    "authorRef",
+                                    abbr_data["text"],
+                                    filename)
+
+            abbr_str = abbr_str + "</simpletable></body></topic>"
+            abbr_file_path = '{}{}{}List.dita'.format(output_path,
+                                                    os.path.sep,
+                                                    abbr_fields[abbr_code]["name"])
+            with open(abbr_file_path, 'w') as f:
+                f.write(abbr_str)
+
 
 
 
